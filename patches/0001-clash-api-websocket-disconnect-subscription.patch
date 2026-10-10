@@ -1,0 +1,98 @@
+From: sing-box-enhance <noreply@example.com>
+Subject: [PATCH] clashapi: add websocket disconnect subscription
+
+Expose traffic manager close events through
+GET /connections/disconnect. The endpoint only accepts WebSocket upgrades
+and emits one JSON object for each non-DNS connection that closes.
+
+---
+ experimental/clashapi/connections.go | 67 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 67 insertions(+)
+
+diff --git a/experimental/clashapi/connections.go b/experimental/clashapi/connections.go
+index 2cf0a714..43be8574 100644
+--- a/experimental/clashapi/connections.go
++++ b/experimental/clashapi/connections.go
+@@ -24,6 +24,7 @@ import (
+ func connectionRouter(ctx context.Context, network adapter.NetworkManager, trafficManager *trafficcontrol.Manager) http.Handler {
+ 	r := chi.NewRouter()
+ 	r.Get("/", getConnections(ctx, trafficManager))
++	r.Get("/disconnect", subscribeConnectionDisconnects(ctx, trafficManager))
+ 	r.Delete("/", closeAllConnections(ctx, network, trafficManager))
+ 	r.Delete("/{id}", closeConnection(trafficManager))
+ 	return r
+@@ -159,6 +160,72 @@ func getConnections(ctx context.Context, trafficManager *trafficcontrol.Manager)
+ 	}
+ }
+ 
++func subscribeConnectionDisconnects(ctx context.Context, trafficManager *trafficcontrol.Manager) func(w http.ResponseWriter, r *http.Request) {
++	return func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get("Upgrade") != "websocket" {
++			render.Status(r, http.StatusUpgradeRequired)
++			render.JSON(w, r, render.M{"message": "WebSocket upgrade required"})
++			return
++		}
++
++		subscription, done, err := trafficManager.SubscribeEvents()
++		if err != nil {
++			render.Status(r, http.StatusServiceUnavailable)
++			render.JSON(w, r, render.M{"message": err.Error()})
++			return
++		}
++		defer trafficManager.UnSubscribeEvents(subscription)
++
++		conn, _, _, err := ws.UpgradeHTTP(r, w)
++		if err != nil {
++			return
++		}
++		defer conn.Close()
++
++		clientDone := make(chan struct{})
++		go func() {
++			defer close(clientDone)
++			for {
++				_, _, readErr := wsutil.ReadClientData(conn)
++				if readErr != nil {
++					return
++				}
++			}
++		}()
++
++		buf := &bytes.Buffer{}
++		for {
++			select {
++			case <-ctx.Done():
++				return
++			case <-r.Context().Done():
++				return
++			case <-clientDone:
++				return
++			case <-done:
++				return
++			case event := <-subscription:
++				if event.Type != trafficcontrol.ConnectionEventClosed || event.Metadata == nil || event.Metadata.OutboundType == C.TypeDNS {
++					continue
++				}
++				closedAt := event.ClosedAt
++				if closedAt.IsZero() {
++					closedAt = event.Metadata.ClosedAt
++				}
++				buf.Reset()
++				err = json.NewEncoder(buf).Encode(render.M{
++					"id":         event.ID.String(),
++					"closedAt":   closedAt,
++					"connection": connectionObject(*event.Metadata),
++				})
++				if err != nil || wsutil.WriteServerText(conn, buf.Bytes()) != nil {
++					return
++				}
++			}
++		}
++	}
++}
++
+ func closeConnection(trafficManager *trafficcontrol.Manager) func(w http.ResponseWriter, r *http.Request) {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		id := uuid.FromStringOrNil(chi.URLParam(r, "id"))
+-- 
+2.50.1

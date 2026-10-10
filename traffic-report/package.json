@@ -1,0 +1,15 @@
+{
+  "name": "sing-box-traffic-report",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Collect sing-box disconnect logs and generate offline hourly traffic reports",
+  "scripts": {
+    "report": "node traffic-report.mjs",
+    "check": "node --check disconnect-collector.mjs && node --check traffic-report.mjs",
+    "start": "node disconnect-collector.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

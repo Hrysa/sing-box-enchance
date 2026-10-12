@@ -20,7 +20,7 @@ Requires Docker and Bash. Node.js runs inside the container.
 The script runs this command:
 
 ```sh
-docker run -d --init --restart unless-stopped -v "$(pwd):/app" -w /app -e "CLASH_WS_URL=${CLASH_WS_URL:-ws://192.168.2.3:9090/connections/disconnect}" node:22-alpine node disconnect-collector.mjs
+docker run -d --name sing-box-disconnect-collector --init --restart unless-stopped -v "$(pwd):/app" -v /etc/localtime:/etc/localtime:ro -w /app -e "CLASH_WS_URL=${CLASH_WS_URL:-ws://192.168.2.3:9090/connections/disconnect}" harbor.fy2.me/hub/node:22-alpine node disconnect-collector.mjs
 ```
 
 Only `CLASH_WS_URL` is passed through by the startup script. To change the endpoint:
@@ -33,14 +33,16 @@ The command prints a container ID and returns immediately. The entire current
 directory is mounted at `/app`, so run it from `traffic-report/`.
 Logs are written to `/app/logs`, which is the local `logs/` directory.
 
-The container restarts automatically unless manually stopped. Each invocation
-creates a new container; use the existing container ID to manage it:
+The container restarts automatically unless manually stopped. Its fixed name is
+`sing-box-disconnect-collector`. Use this name to manage it:
 
 ```sh
-docker logs -f <container-id>
-docker stop <container-id>
-docker start <container-id>
+docker logs -f sing-box-disconnect-collector
+docker stop sing-box-disconnect-collector
+docker start sing-box-disconnect-collector
 ```
+
+If this container already exists, use `docker start` instead of rerunning the script.
 
 ## Generate a report
 
@@ -59,7 +61,7 @@ node traffic-report.mjs logs/disconnect.jsonl
 Or generate a report entirely in Docker:
 
 ```sh
-docker run --rm -v "$(pwd):/app:ro" -w /app node:22-alpine node traffic-report.mjs logs/disconnect-2026-10-10.jsonl
+docker run --rm -v "$(pwd):/app:ro" -v /etc/localtime:/etc/localtime:ro -w /app harbor.fy2.me/hub/node:22-alpine node traffic-report.mjs logs/disconnect-2026-10-10.jsonl
 ```
 
 To save a local report:
@@ -80,8 +82,8 @@ but do not appear among its children. Active connections are not included.
 
 - Files use the collection date: `logs/disconnect-YYYY-MM-DD.jsonl`.
   The first event after midnight opens a new file. Restarts append to that day's file.
-- The Docker collector uses UTC. Local collection and reports use the local
-  timezone. Use the Docker report command to match the collector's UTC timezone.
+- Docker commands mount the Linux host's `/etc/localtime` read-only, so collection
+  and reports use the host timezone. Local Node.js runs use the local timezone.
 - Hourly totals use `closedAt`, falling back to `collectedAt` when absent.
   The report displays the timezone offset beside each hour.
 - All traffic from a connection is assigned to its closing hour. These logs
